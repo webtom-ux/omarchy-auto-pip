@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "webtom.auto-pip",
   "name": "Auto PiP",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "webtom",
   "license": "MIT",
   "description": "Automatically picture-in-picture matching apps (YouTube, mpv, …) when you leave their workspace, and restore them when you come back.",

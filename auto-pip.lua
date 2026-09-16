@@ -7,6 +7,14 @@ if src:sub(1, 1) == "@" then
 end
 local plugin_dir = src:match("^(.*)/") or "."
 
+-- omarchy-menu-keybindings dofiles hyprland.lua with a stubbed `hl`.
+-- Unknown methods return a proxy table that is never nil, so
+-- ipairs(hl.get_windows()) never ends and Super+K appears dead.
+-- Real Hyprland exposes get_windows as a C function.
+if not hl or type(hl.get_windows) ~= "function" then
+  return
+end
+
 local home = os.getenv("HOME") or ""
 local state_home = os.getenv("XDG_STATE_HOME")
 if state_home == nil or state_home == "" then
