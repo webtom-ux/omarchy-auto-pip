@@ -66,3 +66,30 @@ return { enabled = false }
 
 Then `hyprctl reload`. Or `omarchy plugin disable webtom.auto-pip` and comment
 out the Auto PiP block in `~/.config/hypr/hyprland.lua`.
+
+## Uninstall
+
+`omarchy plugin remove` only deletes the plugin folder. Also undo what
+`install.sh` added:
+
+```bash
+omarchy plugin remove webtom.auto-pip
+```
+
+1. Remove the Auto PiP block from `~/.config/hypr/hyprland.lua` (the
+   `dofile` of `webtom.auto-pip/auto-pip.lua`).
+2. Delete `~/.config/chromium/NativeMessagingHosts/com.webtom.auto_pip.json`.
+3. In `~/.config/chromium-flags.conf`, drop this plugin's path from
+   `--load-extension=...` (keep Omarchy's other extensions). Remove these
+   lines if Auto PiP added them and you do not need them otherwise:
+   `--remote-debugging-address=127.0.0.1`,
+   `--remote-debugging-port=19222`,
+   `--remote-allow-origins=*`.
+4. Restart Chromium/YouTube and run `hyprctl reload`.
+
+Optional leftovers:
+
+```bash
+rm -f ~/.config/omarchy/auto-pip.lua
+rm -rf ~/.local/state/omarchy/auto-pip
+```
