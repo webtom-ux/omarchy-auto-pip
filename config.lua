@@ -9,8 +9,8 @@ return {
   width = 480,
   height = 270,
   margin = 40,
-  -- bottom-right | bottom-left | top-right | top-left
-  anchor = "bottom-right",
+  -- bottom-left | bottom-right | top-right | top-left
+  anchor = "bottom-left",
 
   -- Keep the last place you dragged (and resized) the PiP window to.
   remember_position = true,

@@ -76,6 +76,10 @@ if type(state.windows) ~= "table" then
   state.windows = {}
 end
 
+-- Last geometry we dispatched to a window. Used so Chromium's native PiP
+-- spawn position is not stored as a user drag.
+local last_placed = {}
+
 local function ensure_state_dir()
   os.execute("mkdir -p " .. string.format("%q", state_dir))
 end
@@ -288,16 +292,30 @@ local function focused_monitor()
 end
 
 local function monitor_layout(monitor)
+  if type(monitor) ~= "table" and type(monitor) ~= "userdata" then
+    return { x = 0, y = 0, w = 0, h = 0, left = 0, right = 0, top = 0, bottom = 0 }
+  end
   local scale = monitor.scale
   if type(scale) ~= "number" or scale <= 0 then
     scale = 1
   end
+  local width = monitor.width
+  local height = monitor.height
+  local x = monitor.x
+  local y = monitor.y
+  if type(width) ~= "number" then width = 0 end
+  if type(height) ~= "number" then height = 0 end
+  if type(x) ~= "number" then x = 0 end
+  if type(y) ~= "number" then y = 0 end
   local reserved = monitor.reserved or {}
+  if type(reserved) ~= "table" then
+    reserved = {}
+  end
   return {
-    x = monitor.x or 0,
-    y = monitor.y or 0,
-    w = (monitor.width or 0) / scale,
-    h = (monitor.height or 0) / scale,
+    x = x,
+    y = y,
+    w = width / scale,
+    h = height / scale,
     left = tonumber(reserved.left) or 0,
     right = tonumber(reserved.right) or 0,
     top = tonumber(reserved.top) or 0,
@@ -331,6 +349,39 @@ local function default_geometry(monitor)
     w = math.floor(width + 0.5),
     h = math.floor(height + 0.5),
   }
+end
+
+local function nearest_stock_anchor(geometry, monitor)
+  local box = monitor_layout(monitor)
+  local width = tonumber(cfg.width) or 480
+  local height = tonumber(cfg.height) or 270
+  local margin = tonumber(cfg.margin) or 40
+  local candidates = {
+    ["bottom-left"] = {
+      x = box.x + box.left + margin,
+      y = box.y + box.h - box.bottom - margin - height,
+    },
+    ["bottom-right"] = {
+      x = box.x + box.w - box.right - margin - width,
+      y = box.y + box.h - box.bottom - margin - height,
+    },
+    ["top-left"] = {
+      x = box.x + box.left + margin,
+      y = box.y + box.top + margin,
+    },
+    ["top-right"] = {
+      x = box.x + box.w - box.right - margin - width,
+      y = box.y + box.top + margin,
+    },
+  }
+  local best, best_d = nil, math.huge
+  for name, pos in pairs(candidates) do
+    local d = math.abs((geometry.x or 0) - pos.x) + math.abs((geometry.y or 0) - pos.y)
+    if d < best_d then
+      best, best_d = name, d
+    end
+  end
+  return best, best_d
 end
 
 local function clamp_geometry(geometry, monitor)
@@ -400,6 +451,19 @@ local function remember_geometry(win)
   if not plausible_pip_size(size.x, size.y, win.monitor or focused_monitor()) then
     return
   end
+  local placed = last_placed[win.address]
+  if not placed then
+    -- Overlay just appeared at Chromium's own coordinates; ignore it.
+    if is_pip_overlay(win) then
+      return
+    end
+  else
+    local dx = math.abs(at.x - placed.x)
+    local dy = math.abs(at.y - placed.y)
+    if dx <= 24 and dy <= 24 then
+      return
+    end
+  end
   state.geometry = { x = at.x, y = at.y, w = size.x, h = size.y }
 end
 
@@ -408,7 +472,18 @@ local function pip_geometry(monitor, index)
   if cfg.remember_position and type(state.geometry) == "table" then
     local saved_w = tonumber(state.geometry.w)
     local saved_h = tonumber(state.geometry.h)
-    if plausible_pip_size(saved_w, saved_h, monitor) then
+    local use_saved = plausible_pip_size(saved_w, saved_h, monitor)
+    if use_saved then
+      local nearest, dist = nearest_stock_anchor(state.geometry, monitor)
+      local anchor = cfg.anchor or "bottom-left"
+      -- Ignore a stored stock corner that is not the configured anchor
+      -- (Chromium spawn / previous default), keep real user drags.
+      if nearest and nearest ~= anchor and dist < 80 then
+        use_saved = false
+        state.geometry = nil
+      end
+    end
+    if use_saved then
       if state.geometry.x then
         base.x = state.geometry.x
       end
@@ -436,7 +511,14 @@ local function home_workspace_visible(info)
   return workspace_visible(ws)
 end
 
-local placed_overlays = {}
+local function geometry_matches(win, geometry)
+  local at = vec(win.at)
+  local size = vec(win.size)
+  return math.abs(at.x - geometry.x) <= 8
+    and math.abs(at.y - geometry.y) <= 8
+    and math.abs(size.x - geometry.w) <= 8
+    and math.abs(size.y - geometry.h) <= 8
+end
 
 local function place_overlay(win, index)
   local monitor = focused_monitor()
@@ -456,6 +538,12 @@ local function place_overlay(win, index)
     y = geometry.y,
     relative = false,
   }))
+  last_placed[win.address] = {
+    x = geometry.x,
+    y = geometry.y,
+    w = geometry.w,
+    h = geometry.h,
+  }
   if not has_tag(win, "auto-pip") then
     dispatch(hl.dsp.window.tag({ window = win, tag = "+auto-pip" }))
   end
@@ -538,6 +626,12 @@ local function enter_window_pip(win, index)
     y = geometry.y,
     relative = false,
   }))
+  last_placed[win.address] = {
+    x = geometry.x,
+    y = geometry.y,
+    w = geometry.w,
+    h = geometry.h,
+  }
   if not has_tag(win, "auto-pip") then
     dispatch(hl.dsp.window.tag({ window = win, tag = "+auto-pip" }))
   end
@@ -697,23 +791,25 @@ local function reconcile()
     if is_pip_overlay(win) then
       seen_overlays[win.address] = true
       if html_active then
-        if placed_overlays[win.address] then
+        local want = pip_geometry(focused_monitor() or win.monitor, overlay_index)
+        if geometry_matches(win, want) then
+          last_placed[win.address] = {
+            x = want.x,
+            y = want.y,
+            w = want.w,
+            h = want.h,
+          }
           remember_geometry(win)
         else
           place_overlay(win, overlay_index)
-          local size = vec(win.size)
-          local want = pip_geometry(focused_monitor() or win.monitor, overlay_index)
-          if math.abs(size.x - want.w) <= 8 and math.abs(size.y - want.h) <= 8 then
-            placed_overlays[win.address] = true
-          end
         end
         overlay_index = overlay_index + 1
       end
     end
   end
-  for address, _ in pairs(placed_overlays) do
-    if not seen_overlays[address] then
-      placed_overlays[address] = nil
+  for address, _ in pairs(last_placed) do
+    if not seen_overlays[address] and not state.windows[address] then
+      last_placed[address] = nil
     end
   end
   if html_active and next(seen_overlays) == nil then
@@ -742,9 +838,11 @@ local function tick()
   reconcile()
 end
 
-if type(state.geometry) == "table"
-    and not plausible_pip_size(state.geometry.w, state.geometry.h, focused_monitor()) then
-  state.geometry = nil
+if type(hl.get_windows) == "function" and type(state.geometry) == "table" then
+  local monitor = focused_monitor()
+  if not plausible_pip_size(state.geometry.w, state.geometry.h, monitor) then
+    state.geometry = nil
+  end
 end
 
 if o and o.window then
@@ -758,12 +856,21 @@ if o and o.window then
     no_dim = true,
   })
   -- Last matching rule wins. Override Omarchy's stock PiP (600x338, top-right).
+  local m = tostring(margin)
+  local anchor = cfg.anchor or "bottom-right"
+  local move
+  if anchor == "bottom-left" then
+    move = { m, "(monitor_h-window_h-" .. m .. ")" }
+  elseif anchor == "top-right" then
+    move = { "(monitor_w-window_w-" .. m .. ")", m }
+  elseif anchor == "top-left" then
+    move = { m, m }
+  else
+    move = { "(monitor_w-window_w-" .. m .. ")", "(monitor_h-window_h-" .. m .. ")" }
+  end
   local pip_box = {
     size = { width, height },
-    move = {
-      "(monitor_w-window_w-" .. margin .. ")",
-      "(monitor_h-window_h-" .. margin .. ")",
-    },
+    move = move,
   }
   o.window({ title = "(Picture.?in.?[Pp]icture)" }, pip_box)
   o.window({ tag = "pip" }, pip_box)
@@ -792,8 +899,6 @@ hl.timer(function()
     for _, win in ipairs(hl.get_windows()) do
       local info = state.windows[win.address]
       if info and info.mode ~= "html" then
-        remember_geometry(win)
-      elseif is_pip_overlay(win) then
         remember_geometry(win)
       end
     end
