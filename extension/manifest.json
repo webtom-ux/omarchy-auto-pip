@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Omarchy Auto PiP",
+  "version": "1.0.3",
+  "description": "Enter and exit HTML Picture-in-Picture for YouTube when Omarchy Auto PiP asks.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnhPlI9IxE2ZKVy8QJDmtKXOLUU+mn1NEO3eIQ9B56v9SmixzCJbFv0PBGco8j5dPcFKKKFYp4wky8TY8zmcx5j75ym24xicG6QckIJITopu71huY9yWP8+w6McOYTagVRTLCATg4z9x1BoOTHN3giCy9Y31V+TMt7DP6PkOMWakdau4Zrv5g27x6xAq592DWvx2mlEjNrwdmtKBsQfvEHEAnkTyJrW7zy9wE3yNz+K2sy48+PlYvO3RZvRaY/+6ayn/gKPZUCZwD6mJhf7mzsSKOnLFiO6OZBluNiGB6yyapsA4tZSEf2GdYSReE4qqOGXf2KtPx5jJaXCkr7LOGQwIDAQAB",
+  "permissions": ["scripting", "tabs", "nativeMessaging"],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "*://youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background-1.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://youtube.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

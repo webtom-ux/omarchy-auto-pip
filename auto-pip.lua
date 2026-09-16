@@ -99,11 +99,12 @@ local function write_state()
   file:write("  windows = {\n")
   for address, info in pairs(state.windows) do
     file:write(string.format(
-      "    [%q] = { workspace = %q, floating = %s, fullscreen = %s },\n",
+      "    [%q] = { workspace = %q, floating = %s, fullscreen = %s, mode = %q },\n",
       address,
       tostring(info.workspace or ""),
       tostring(info.floating == true),
-      tostring(info.fullscreen or 0)
+      tostring(info.fullscreen or 0),
+      tostring(info.mode or "window")
     ))
   end
   file:write("  },\n}\n")
@@ -200,15 +201,31 @@ local function has_tag(win, tag)
   return false
 end
 
-local function is_native_pip(win)
+local function is_pip_overlay(win)
   local title = string.lower(win.title or "")
-  if title:find("picture%-in%-picture", 1, false) then
+  -- Chromium uses "Picture in picture"; some apps use "Picture-in-Picture".
+  return title:find("picture.in.picture") ~= nil
+end
+
+local function is_native_pip(win)
+  if is_pip_overlay(win) then
     return true
   end
   if has_tag(win, "pip") or has_tag(win, "pop") then
     return true
   end
   return false
+end
+
+local function uses_html_pip(win)
+  local class_name = win.class or ""
+  return class_name:find("youtube%.com__") ~= nil
+end
+
+local function send_html_pip(cmd)
+  local script = plugin_dir .. "/pip-cmd.py"
+  hl.exec_cmd("python3 " .. string.format("%q", script) .. " " .. cmd)
+  log("html pip " .. cmd)
 end
 
 local function matches(win)
@@ -349,16 +366,21 @@ local function remember_geometry(win)
 end
 
 local function pip_geometry(monitor, index)
-  local base
-  if type(state.geometry) == "table" then
-    base = {
-      x = state.geometry.x,
-      y = state.geometry.y,
-      w = state.geometry.w or cfg.width,
-      h = state.geometry.h or cfg.height,
-    }
-  else
-    base = default_geometry(monitor)
+  local base = default_geometry(monitor)
+  if cfg.remember_position and type(state.geometry) == "table" then
+    if state.geometry.x then
+      base.x = state.geometry.x
+    end
+    if state.geometry.y then
+      base.y = state.geometry.y
+    end
+    -- Ignore Omarchy's stock native PiP size (600x338) if we stored it by mistake.
+    local saved_w = tonumber(state.geometry.w)
+    local saved_h = tonumber(state.geometry.h)
+    if saved_w and saved_h and not (saved_w == 600 and saved_h == 338) then
+      base.w = saved_w
+      base.h = saved_h
+    end
   end
   base = clamp_geometry(base, monitor)
   if index > 0 then
@@ -377,7 +399,67 @@ local function home_workspace_visible(info)
   return workspace_visible(ws)
 end
 
-local function enter_pip(win, index)
+local placed_overlays = {}
+
+local function place_overlay(win, index)
+  local monitor = focused_monitor()
+  if not monitor then
+    return
+  end
+  local geometry = pip_geometry(monitor, index)
+  dispatch(hl.dsp.window.resize({
+    window = win,
+    x = geometry.w,
+    y = geometry.h,
+    relative = false,
+  }))
+  dispatch(hl.dsp.window.move({
+    window = win,
+    x = geometry.x,
+    y = geometry.y,
+    relative = false,
+  }))
+  if not has_tag(win, "auto-pip") then
+    dispatch(hl.dsp.window.tag({ window = win, tag = "+auto-pip" }))
+  end
+  dispatch(hl.dsp.window.alter_zorder({ window = win, mode = "top" }))
+end
+
+local function restore_window_chrome(win, info)
+  if win.pinned then
+    dispatch(hl.dsp.window.pin({ window = win, action = "unset" }))
+  end
+  if has_tag(win, "auto-pip") then
+    dispatch(hl.dsp.window.tag({ window = win, tag = "-auto-pip" }))
+  end
+
+  local workspace = info and info.workspace
+  if workspace and workspace ~= "" then
+    dispatch(hl.dsp.window.move({
+      window = win,
+      workspace = workspace,
+      follow = false,
+    }))
+  end
+
+  local was_floating = info and info.floating == true
+  if was_floating then
+    if not win.floating then
+      dispatch(hl.dsp.window.float({ window = win, action = "set" }))
+    end
+  else
+    if win.floating then
+      dispatch(hl.dsp.window.float({ window = win, action = "unset" }))
+    end
+  end
+
+  local fullscreen = info and tonumber(info.fullscreen) or 0
+  if fullscreen ~= 0 then
+    dispatch(hl.dsp.window.fullscreen({ window = win, action = "set" }))
+  end
+end
+
+local function enter_window_pip(win, index)
   local ws = win.workspace
   if not ws or ws.special then
     return
@@ -388,6 +470,7 @@ local function enter_pip(win, index)
       workspace = ws.name or tostring(ws.id),
       floating = win.floating == true,
       fullscreen = win.fullscreen or 0,
+      mode = "window",
     }
   end
 
@@ -422,46 +505,64 @@ local function enter_pip(win, index)
     dispatch(hl.dsp.window.tag({ window = win, tag = "+auto-pip" }))
   end
   dispatch(hl.dsp.window.alter_zorder({ window = win, mode = "top" }))
-  log("enter pip " .. win.address .. " home=" .. tostring(state.windows[win.address].workspace))
+  log("enter window pip " .. win.address)
+end
+
+local function enter_html_pip(win)
+  local ws = win.workspace
+  if not ws or ws.special then
+    return
+  end
+
+  local home = ws.name or tostring(ws.id)
+  if not state.windows[win.address] then
+    state.windows[win.address] = {
+      workspace = home,
+      floating = false,
+      fullscreen = win.fullscreen or 0,
+      mode = "html",
+    }
+  else
+    state.windows[win.address].mode = "html"
+  end
+
+  -- If a previous version floated the whole YouTube app, put it back first.
+  if win.floating or win.pinned then
+    restore_window_chrome(win, state.windows[win.address])
+  end
+
+  send_html_pip("enter")
+  log("enter html pip " .. win.address .. " home=" .. home)
+end
+
+local function enter_pip(win, index)
+  if uses_html_pip(win) then
+    enter_html_pip(win)
+  else
+    enter_window_pip(win, index)
+  end
 end
 
 local function leave_pip(win, info)
-  remember_geometry(win)
-
-  if win.pinned then
-    dispatch(hl.dsp.window.pin({ window = win, action = "unset" }))
-  end
-  if has_tag(win, "auto-pip") then
-    dispatch(hl.dsp.window.tag({ window = win, tag = "-auto-pip" }))
-  end
-
-  local workspace = info and info.workspace
-  if workspace and workspace ~= "" then
-    dispatch(hl.dsp.window.move({
-      window = win,
-      workspace = workspace,
-      follow = false,
-    }))
-  end
-
-  local was_floating = info and info.floating == true
-  if was_floating then
-    if not win.floating then
-      dispatch(hl.dsp.window.float({ window = win, action = "set" }))
+  local mode = info and info.mode or "window"
+  if mode == "html" or uses_html_pip(win) then
+    send_html_pip("exit")
+    if win.floating or win.pinned then
+      restore_window_chrome(win, info)
+    elseif info and info.workspace and info.workspace ~= "" then
+      dispatch(hl.dsp.window.move({
+        window = win,
+        workspace = info.workspace,
+        follow = false,
+      }))
     end
   else
-    if win.floating then
-      dispatch(hl.dsp.window.float({ window = win, action = "unset" }))
-    end
-  end
-
-  local fullscreen = info and tonumber(info.fullscreen) or 0
-  if fullscreen ~= 0 then
-    dispatch(hl.dsp.window.fullscreen({ window = win, action = "set" }))
+    remember_geometry(win)
+    restore_window_chrome(win, info)
   end
 
   state.windows[win.address] = nil
-  log("leave pip " .. win.address .. " -> " .. tostring(workspace))
+  log("leave pip " .. win.address .. " mode=" .. mode)
 end
 
 local busy = false
@@ -516,16 +617,22 @@ local function reconcile()
         home_visible = workspace_visible(win.workspace)
       end
       local playing = window_is_playing(win)
+      local html = uses_html_pip(win) or (info and info.mode == "html")
       if home_visible then
         if info then
           leave_pip(win, info)
           left = true
         end
       elseif playing then
-        if info then
+        if info and not html then
           remember_geometry(win)
         end
-        local already = win.floating and win.pinned and info ~= nil
+        local already
+        if html then
+          already = info ~= nil and info.mode == "html"
+        else
+          already = win.floating and win.pinned and info ~= nil
+        end
         if not already then
           enter_pip(win, pip_index)
           entered = true
@@ -538,6 +645,42 @@ local function reconcile()
         end
       end
     end
+  end
+
+  local overlay_index = 0
+  local seen_overlays = {}
+  local html_active = false
+  for _, info in pairs(state.windows) do
+    if info.mode == "html" then
+      html_active = true
+      break
+    end
+  end
+  for _, win in ipairs(hl.get_windows()) do
+    if is_pip_overlay(win) then
+      seen_overlays[win.address] = true
+      if html_active then
+        if placed_overlays[win.address] then
+          remember_geometry(win)
+        else
+          place_overlay(win, overlay_index)
+          local size = vec(win.size)
+          local want = pip_geometry(focused_monitor() or win.monitor, overlay_index)
+          if math.abs(size.x - want.w) <= 8 and math.abs(size.y - want.h) <= 8 then
+            placed_overlays[win.address] = true
+          end
+        end
+        overlay_index = overlay_index + 1
+      end
+    end
+  end
+  for address, _ in pairs(placed_overlays) do
+    if not seen_overlays[address] then
+      placed_overlays[address] = nil
+    end
+  end
+  if html_active and next(seen_overlays) == nil then
+    send_html_pip("enter")
   end
 
   for address, _ in pairs(state.windows) do
@@ -563,11 +706,22 @@ local function tick()
 end
 
 if o and o.window then
+  local margin = tonumber(cfg.margin) or 40
+  local width = tonumber(cfg.width) or 480
+  local height = tonumber(cfg.height) or 270
   o.window({ tag = "auto-pip" }, {
     tag = "-default-opacity",
     opacity = "1 1",
     keep_aspect_ratio = true,
     no_dim = true,
+  })
+  -- Override Omarchy's default top-right native PiP placement.
+  o.window({ title = "(Picture.?in.?[Pp]icture)" }, {
+    size = { width, height },
+    move = {
+      "(monitor_w-window_w-" .. margin .. ")",
+      "(monitor_h-window_h-" .. margin .. ")",
+    },
   })
 end
 
@@ -588,7 +742,10 @@ hl.timer(function()
   refresh_playing()
   if next(state.windows) then
     for _, win in ipairs(hl.get_windows()) do
-      if state.windows[win.address] then
+      local info = state.windows[win.address]
+      if info and info.mode ~= "html" then
+        remember_geometry(win)
+      elseif is_pip_overlay(win) then
         remember_geometry(win)
       end
     end
