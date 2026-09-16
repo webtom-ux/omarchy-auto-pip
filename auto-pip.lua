@@ -475,7 +475,7 @@ local function pip_geometry(monitor, index)
     local use_saved = plausible_pip_size(saved_w, saved_h, monitor)
     if use_saved then
       local nearest, dist = nearest_stock_anchor(state.geometry, monitor)
-      local anchor = cfg.anchor or "bottom-left"
+      local anchor = cfg.anchor or "bottom-right"
       -- Ignore a stored stock corner that is not the configured anchor
       -- (Chromium spawn / previous default), keep real user drags.
       if nearest and nearest ~= anchor and dist < 80 then

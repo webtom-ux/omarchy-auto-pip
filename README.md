@@ -9,7 +9,7 @@ toolbar). mpv, VLC and similar players still pop out as the whole window.
 ## Behavior
 
 1. YouTube is playing on workspace 3.
-2. Switch to workspace 1 → a small floating PiP appears (bottom-left by
+2. Switch to workspace 1 → a small floating PiP appears (bottom-right by
    default, or wherever you last dragged it). Paused videos stay put.
 3. Drag the PiP wherever you like; the position is remembered.
 4. Pause → PiP closes. Play on another workspace → PiP comes back.
@@ -43,7 +43,7 @@ return {
   width = 480,
   height = 270,
   margin = 40,
-  anchor = "bottom-left", -- bottom-right, top-right, top-left
+  anchor = "bottom-right", -- bottom-left, top-right, top-left
   remember_position = true,
   only_when_playing = true,
   matches = {
