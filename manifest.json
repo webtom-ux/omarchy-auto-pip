@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "webtom.auto-pip",
+  "name": "Auto PiP",
+  "version": "1.0.0",
+  "author": "webtom",
+  "license": "MIT",
+  "description": "Automatically picture-in-picture matching apps (YouTube, mpv, …) when you leave their workspace, and restore them when you come back.",
+  "kinds": [
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}
